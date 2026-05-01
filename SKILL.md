@@ -1,7 +1,7 @@
 ---
 name: book-to-skill
-description: Converts a technical book PDF into a structured Claude Code skill with indexed chapters, core mental models, patterns, glossary, and cheatsheet. Use when the user wants to study a technical book through Claude, reference a book during work, or build a reusable knowledge base from any PDF.
-when_to_use: Trigger phrases — "turn this book into a skill", "create a skill from this PDF", "I want to study X book", "add this book to my skills", "convert PDF to skill". Accepts a path to a PDF and optional skill name slug.
+description: Converts a technical book PDF into a structured Claude Code skill — extracting frameworks, mental models, principles, techniques, and anti-patterns the author crystallized. Use when the user wants to study a book through Claude, apply an author's frameworks while working, or build a reusable knowledge base from any PDF.
+when_to_use: Trigger phrases — "turn this book into a skill", "create a skill from this PDF", "I want to study X book", "add this book to my skills", "convert PDF to skill", "analyze this book", "extract frameworks from this book". Accepts a path to a PDF and optional skill name slug.
 disable-model-invocation: true
 context: fork
 agent: general-purpose
@@ -13,11 +13,43 @@ effort: high
 
 # Book-to-Skill Converter
 
-Convert a technical book PDF into a well-structured Claude Code skill optimized for study and reference.
+Transform written knowledge into actionable Claude Code skills by extracting structure — not producing summaries.
 
-## Input
-- `$0` — absolute or relative path to the PDF file
-- `$1` — (optional) skill name slug, e.g. `designing-data-apps`. Derived from filename if omitted.
+## Philosophy
+
+Books contain crystallized expertise: frameworks, principles, and techniques that took years to develop. This skill extracts that knowledge into a format Claude can leverage repeatedly.
+
+**Extract structure, not summaries.** A skill isn't a book report. It's a toolkit of:
+- Named frameworks (mental models with clear application)
+- Actionable principles (rules that guide decisions)
+- Techniques (step-by-step methods)
+- Anti-patterns (what to avoid and why)
+- Voice calibration (how the author thinks and communicates)
+
+**Preserve the author's precision.** Frameworks often have specific names for reasons. "The 5 Whys" isn't interchangeable with "ask why multiple times." Capture the exact formulation.
+
+**Layer depth appropriately.** Simple books → simple skills. Complex books with 10+ frameworks → skills with reference files and on-demand chapters.
+
+---
+
+## Modes of Operation
+
+Three paths available. Route based on what the user asks:
+
+### 1. Full Conversion (Default)
+**Trigger:** User provides a PDF path without special instructions
+**Action:** Run all steps below (Steps 0–9)
+**Output:** Complete skill with SKILL.md, chapters/, glossary, patterns, cheatsheet
+
+### 2. Analyze Only
+**Trigger:** User says "analyze", "just extract", or "I want to review before generating"
+**Action:** Run Steps 0–3, then produce a structured extraction report (frameworks, principles, techniques found). Stop — do NOT generate skill files.
+**Output:** Analysis report for user review
+
+### 3. Generate from Prior Analysis
+**Trigger:** User has existing analysis notes or previously ran analyze-only
+**Action:** Skip Steps 0–3, use the provided analysis as input, run Steps 4–9
+**Output:** Skill files from the provided analysis
 
 ---
 
@@ -65,20 +97,60 @@ Read the first 8,000 characters of `/tmp/book_skill_work/full_text.txt` to ident
 
 Then read the Table of Contents section if present to map all chapters.
 
+**If mode is "Analyze Only":** produce the extraction report now and stop. Structure:
+```
+## Extraction Report — <Title>
+
+### Author's Core Frameworks
+- **<Framework Name>**: <what it is and when to apply>
+
+### Key Principles
+- <Principle>: <actionable rule>
+
+### Techniques & Methods
+- <Technique>: <step-by-step or how-to>
+
+### Anti-patterns
+- <What to avoid>: <why>
+
+### Suggested Skill Name
+`{author-lastname}-{core-concept}` — e.g. `cialdini-influence`
+
+### Chapters Detected
+| # | Title | Main Frameworks |
+```
+
 ---
 
-## Step 4 — Determine skill name
+## Step 4 — Ask purpose (Full Conversion only)
+
+Before generating, ask the user:
+
+> "What should this skill help you do? (Pick one or more)
+> 1. Apply the author's frameworks while working
+> 2. Think with the author's mental models
+> 3. Reference specific chapters and concepts
+> 4. All of the above"
+
+Use the answer to weight what gets highlighted in the SKILL.md Core section.
+
+---
+
+## Step 5 — Determine skill name
 
 If `$1` was provided, use it as the skill slug.
-Otherwise, derive from the book title: lowercase, hyphens, no special chars.
-Example: "Designing Data-Intensive Applications" → `designing-data-intensive-apps`
+Otherwise, propose two options and let the user choose:
+- **By author-concept**: `{author-lastname}-{core-concept}` (e.g. `cialdini-influence`, `meadows-systems`)
+- **By title**: lowercase hyphens from book title (e.g. `designing-data-intensive-apps`)
+
+Default to author-concept format if the book has a strong methodological identity.
 
 Check that `~/.claude/skills/<skill_name>/` does NOT already exist.
 If it does, append `-2` or ask the user before overwriting.
 
 ---
 
-## Step 5 — Create skill directory structure
+## Step 6 — Create skill directory structure
 
 ```bash
 mkdir -p ~/.claude/skills/<skill_name>/chapters
@@ -86,7 +158,7 @@ mkdir -p ~/.claude/skills/<skill_name>/chapters
 
 ---
 
-## Step 6 — Generate chapter summaries
+## Step 7 — Generate chapter summaries
 
 **TOKEN BUDGET RULE — CRITICAL:**
 - Each chapter summary file: **800–1,200 tokens** (dense, not verbose)
@@ -104,22 +176,26 @@ Create `~/.claude/skills/<skill_name>/chapters/ch<NN>-<slug>.md` with this struc
 ## Core Idea
 <1–2 sentences: the single most important thing this chapter teaches>
 
+## Frameworks Introduced
+- **<Framework Name>**: <exact formulation — preserve the author's naming>
+  - When to use: <specific situation>
+  - How: <steps or criteria>
+
 ## Key Concepts
-- **<Term>**: <precise definition in 1 sentence>
 - **<Term>**: <precise definition in 1 sentence>
 (5–10 most important terms from this chapter)
 
 ## Mental Models
-<2–4 frameworks or thinking tools introduced. Write as "Use X when Y" or "Think of X as Y">
+<2–4 frameworks or thinking tools. Write as "Use X when Y" or "Think of X as Y">
 
-## Patterns & Techniques
-<Concrete approaches, algorithms, or methods. Numbered list. Action-oriented.>
+## Anti-patterns
+- **<What to avoid>**: <why it fails>
 
 ## Key Takeaways
 1. <Actionable insight>
 2. <Actionable insight>
 3. <Actionable insight>
-(3–7 takeaways that a practitioner must remember)
+(3–7 takeaways a practitioner must remember)
 
 ## Connects To
 - **Ch N**: <why this chapter relates>
@@ -128,7 +204,7 @@ Create `~/.claude/skills/<skill_name>/chapters/ch<NN>-<slug>.md` with this struc
 
 ---
 
-## Step 7 — Generate supporting files
+## Step 8 — Generate supporting files
 
 ### glossary.md
 Create `~/.claude/skills/<skill_name>/glossary.md`:
@@ -150,7 +226,7 @@ Create `~/.claude/skills/<skill_name>/cheatsheet.md`:
 
 ---
 
-## Step 8 — Generate the master SKILL.md
+## Step 9 — Generate the master SKILL.md
 
 **CRITICAL TOKEN BUDGET: Keep SKILL.md body under 4,000 tokens.**
 Compaction truncates from the END — put the most important content FIRST.
@@ -160,10 +236,10 @@ Create `~/.claude/skills/<skill_name>/SKILL.md`:
 ```markdown
 ---
 name: <skill_name>
-description: Knowledge base from "<Full Title>" by <Author(s)>. Use when working with <key topics, 3–6 terms>. Covers <N> chapters on <brief scope sentence>.
+description: Knowledge base from "<Full Title>" by <Author(s)>. Use when applying <author>'s frameworks for <key topics, 3–6 terms>.
 when_to_use: <10–15 trigger phrases based on book topics and terms. Comma-separated.>
 allowed-tools: Read Grep
-argument-hint: [topic, chapter number, or concept]
+argument-hint: [topic, framework name, or chapter number]
 ---
 
 # <Full Title>
@@ -171,36 +247,36 @@ argument-hint: [topic, chapter number, or concept]
 
 ## How to Use This Skill
 
-- **Without arguments** — `/skill-name` loads core mental models for reference
+- **Without arguments** — `/skill-name` loads core frameworks for reference
 - **With a topic** — `/skill-name replication` → I find and read the relevant chapter
 - **With chapter** — `/skill-name ch05` → I load that specific chapter
 - **Browse** — ask "what chapters do you have?" to see the full index
 
-When you ask about a topic not covered in Core Mental Models below, I will read
+When you ask about a topic not covered in Core Frameworks below, I will read
 the relevant chapter file before answering.
 
 ---
 
-## Core Mental Models
-<!-- ~2,000 tokens: the 10–15 most important concepts from the ENTIRE book.
-     Written as dense, actionable knowledge. Not summaries — practitioner insights.
-     Use imperative: "Use X when Y", "Prefer X over Y because Z", "When X, always Y". -->
+## Core Frameworks & Mental Models
+<!-- ~2,000 tokens: the author's most important named frameworks and principles.
+     Preserve exact names. Write as "Use X when Y", "Prefer X over Y because Z".
+     This is a toolkit, not a summary. -->
 
-<generate 2,000 tokens of the most critical insights from the entire book here>
+<generate 2,000 tokens of the most critical frameworks and insights here>
 
 ---
 
 ## Chapter Index
 
-| # | Title | Key Topics |
-|---|-------|------------|
-| [ch01](chapters/ch01-<slug>.md) | <Title> | <topic1>, <topic2>, <topic3> |
-| [ch02](chapters/ch02-<slug>.md) | <Title> | <topic1>, <topic2>, <topic3> |
+| # | Title | Key Frameworks |
+|---|-------|----------------|
+| [ch01](chapters/ch01-<slug>.md) | <Title> | <framework1>, <framework2> |
+| [ch02](chapters/ch02-<slug>.md) | <Title> | <framework1>, <framework2> |
 ...
 
 ## Topic Index
 
-<!-- Alphabetical. Major terms → chapter(s) that cover them. -->
+<!-- Alphabetical. Major terms/frameworks → chapter(s) that cover them. -->
 - **<Term>** → ch<N>[, ch<N>]
 - **<Term>** → ch<N>
 
@@ -221,7 +297,7 @@ or ask Claude directly.
 
 ---
 
-## Step 9 — Cleanup and report
+## Step 10 — Cleanup and report
 
 ```bash
 rm -rf /tmp/book_skill_work
@@ -252,9 +328,11 @@ Usage:
 
 ## Quality Rules
 
-1. **Density over completeness** — a 1,000-token summary beats a 10,000-token excerpt
-2. **Practitioner voice** — write "Use X when Y", not "The book explains X"
-3. **Front-load SKILL.md** — compaction keeps the first 5,000 tokens; most important content comes first
-4. **Chapter files are on-demand** — they don't count against skill budget until loaded
-5. **Never copy raw book text** — always synthesize, summarize, extract signal
-6. **Topic index is critical** — it's how Claude navigates to the right chapter file
+1. **Extract structure, not summaries** — capture named frameworks, exact formulations, anti-patterns; not chapter recaps
+2. **Preserve the author's precision** — "The 5 Whys" ≠ "ask why multiple times"; keep exact naming
+3. **Density over completeness** — a 1,000-token summary beats a 10,000-token excerpt
+4. **Practitioner voice** — write "Use X when Y", not "The book explains X"
+5. **Front-load SKILL.md** — compaction keeps the first 5,000 tokens; most important content comes first
+6. **Chapter files are on-demand** — they don't count against skill budget until loaded
+7. **Never copy raw book text** — always synthesize, summarize, extract signal
+8. **Topic index is critical** — it's how Claude navigates to the right chapter file
