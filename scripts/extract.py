@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Extract text from a PDF or EPUB file for book-to-skill processing.
+Extract text from a document file for book-to-skill processing.
 
 PDF extraction tries methods in order:
   1. pdftotext (poppler-utils) — best quality
@@ -10,6 +10,13 @@ PDF extraction tries methods in order:
 EPUB extraction tries methods in order:
   1. ebooklib + BeautifulSoup4 — best quality
   2. zipfile + html.parser — stdlib fallback (no extra deps)
+
+Other supported formats:
+  - Plain text / Markdown / reStructuredText / AsciiDoc — direct read
+  - HTML — BeautifulSoup4 if available, then stdlib html.parser
+  - DOCX — python-docx if available, then stdlib ZIP/XML fallback
+  - RTF — striprtf if available, then regex fallback
+  - MOBI/AZW/AZW3 — Calibre ebook-convert if available
 
 Outputs:
   <tempdir>/book_skill_work/full_text.txt  — full extracted text
@@ -41,9 +48,159 @@ OUTPUT_META = OUTPUT_DIR / "metadata.json"
 
 WORDS_PER_TOKEN = 0.75  # approximate
 
+TEXT_EXTENSIONS = {".txt", ".text", ".md", ".markdown", ".rst", ".adoc", ".asciidoc"}
+HTML_EXTENSIONS = {".html", ".htm", ".xhtml"}
+CALIBRE_EBOOK_EXTENSIONS = {".mobi", ".azw", ".azw3"}
+SUPPORTED_EXTENSIONS = {
+    ".pdf", ".epub", ".docx", ".rtf",
+    *TEXT_EXTENSIONS,
+    *HTML_EXTENSIONS,
+    *CALIBRE_EBOOK_EXTENSIONS,
+}
+
 
 def estimate_tokens(text: str) -> int:
     return int(len(text.split()) / WORDS_PER_TOKEN)
+
+
+def supported_formats_message() -> str:
+    return ", ".join(sorted(SUPPORTED_EXTENSIONS))
+
+
+def read_text_file(path: str) -> str | None:
+    for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return Path(path).read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+        except Exception:
+            return None
+    return None
+
+
+def extract_html_content(raw_html: str) -> str:
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(raw_html, "html.parser")
+        for element in soup(["script", "style", "head"]):
+            element.decompose()
+        return soup.get_text(separator="\n")
+    except ImportError:
+        parser = _HTMLTextExtractor()
+        parser.feed(raw_html)
+        return parser.get_text()
+
+
+def extract_html_file(path: str) -> str | None:
+    raw = read_text_file(path)
+    if raw is None:
+        return None
+    return extract_html_content(raw)
+
+
+def extract_docx_with_python_docx(docx_path: str) -> str | None:
+    try:
+        import docx
+        document = docx.Document(docx_path)
+        parts = [paragraph.text for paragraph in document.paragraphs if paragraph.text]
+        for table in document.tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                if any(cells):
+                    parts.append("\t".join(cells))
+        return "\n".join(parts)
+    except ImportError:
+        return None
+    except Exception:
+        return None
+
+
+def extract_docx_with_zipfile(docx_path: str) -> str | None:
+    try:
+        import xml.etree.ElementTree as ET
+
+        with zipfile.ZipFile(docx_path) as zf:
+            xml_bytes = zf.read("word/document.xml")
+        root = ET.fromstring(xml_bytes)
+        namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        parts: list[str] = []
+        for paragraph in root.iter(f"{namespace}p"):
+            texts = [node.text for node in paragraph.iter(f"{namespace}t") if node.text]
+            if texts:
+                parts.append("".join(texts))
+        return "\n".join(parts) if parts else None
+    except Exception:
+        return None
+
+
+def extract_docx(docx_path: str) -> tuple[str, str]:
+    print("Trying python-docx...", end=" ", flush=True)
+    text = extract_docx_with_python_docx(docx_path)
+    if text and text.strip():
+        print("OK")
+        return text, "python-docx"
+
+    print("not available")
+    print("Trying stdlib DOCX parser...", end=" ", flush=True)
+    text = extract_docx_with_zipfile(docx_path)
+    if text and text.strip():
+        print("OK")
+        return text, "zipfile-docx"
+
+    print("FAILED")
+    print(
+        "\nERROR: Could not extract text from DOCX.\n"
+        "Install python-docx for best results:\n"
+        "  pip3 install python-docx",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
+def strip_rtf_fallback(raw: str) -> str:
+    raw = re.sub(r"\\'[0-9a-fA-F]{2}", " ", raw)
+    raw = re.sub(r"\\par[d]?", "\n", raw)
+    raw = re.sub(r"\\tab", "\t", raw)
+    raw = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", raw)
+    raw = raw.replace("{", "").replace("}", "")
+    return html.unescape(raw)
+
+
+def extract_rtf(rtf_path: str) -> tuple[str, str]:
+    raw = read_text_file(rtf_path)
+    if raw is None:
+        print("ERROR: Could not read RTF file", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        from striprtf.striprtf import rtf_to_text
+        text = rtf_to_text(raw)
+        if text.strip():
+            return text, "striprtf"
+    except ImportError:
+        pass
+    except Exception:
+        pass
+
+    return strip_rtf_fallback(raw), "rtf-regex"
+
+
+def extract_with_ebook_convert(input_path: str) -> str | None:
+    if not shutil.which("ebook-convert"):
+        return None
+    output_path = OUTPUT_DIR / "ebook-convert-output.txt"
+    try:
+        result = subprocess.run(
+            ["ebook-convert", input_path, str(output_path)],
+            capture_output=True, text=True, timeout=300
+        )
+        if result.returncode == 0 and output_path.exists():
+            text = output_path.read_text(encoding="utf-8", errors="replace")
+            if text.strip():
+                return text
+    except Exception:
+        pass
+    return None
 
 
 def extract_with_pdftotext(pdf_path: str) -> str | None:
@@ -277,7 +434,8 @@ def extract_with_docling(pdf_path: str) -> str | None:
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: extract.py <path-to-pdf-or-epub> [--mode technical|text]", file=sys.stderr)
+        print("Usage: extract.py <path-to-document> [--mode technical|text]", file=sys.stderr)
+        print(f"Supported formats: {supported_formats_message()}", file=sys.stderr)
         sys.exit(1)
 
     input_path = sys.argv[1]
@@ -295,33 +453,47 @@ def main():
         print(f"ERROR: File not found: {input_path}", file=sys.stderr)
         sys.exit(1)
 
-    ext = Path(input_path).suffix.lower()
-    is_epub = ext == ".epub"
-    is_pdf = ext == ".pdf"
+    input_file = Path(input_path)
+    ext = input_file.suffix.lower()
+    document_format = ext.lstrip(".")
 
-    if not is_epub and not is_pdf:
-        # Sniff magic bytes as fallback
+    # Sniff magic bytes as a fallback for files without useful extensions.
+    if ext not in SUPPORTED_EXTENSIONS:
         with open(input_path, "rb") as f:
             header = f.read(8)
         if header[:4] == b"%PDF":
-            is_pdf = True
-        elif header[:2] == b"PK":  # ZIP magic → likely EPUB
-            is_epub = True
+            ext = ".pdf"
+            document_format = "pdf"
+        elif header[:2] == b"PK":
+            with zipfile.ZipFile(input_path) as zf:
+                names = set(zf.namelist())
+                if "mimetype" in names and zf.read("mimetype").startswith(b"application/epub"):
+                    ext = ".epub"
+                    document_format = "epub"
+                elif "word/document.xml" in names:
+                    ext = ".docx"
+                    document_format = "docx"
+                else:
+                    print(
+                        f"ERROR: Unsupported ZIP-based format '{input_file.name}'. Supported: {supported_formats_message()}",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
         else:
             print(
-                f"ERROR: Unsupported format '{ext}'. Supported: .pdf, .epub",
+                f"ERROR: Unsupported format '{ext or '<none>'}'. Supported: {supported_formats_message()}",
                 file=sys.stderr,
             )
             sys.exit(1)
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    if is_epub:
+    if ext == ".epub":
         print(f"Extracting EPUB: {input_path}")
         text, method = extract_epub(input_path)
         pages = count_epub_chapters(input_path)
         pages_label = "spine_items"
-    else:
+    elif ext == ".pdf":
         print(f"Extracting PDF: {input_path}")
         if extraction_mode == "technical":
             print("Mode: technical — using Docling (layout-aware)...", end=" ", flush=True)
@@ -369,6 +541,52 @@ def main():
 
         pages = count_pages(input_path)
         pages_label = "pages"
+    elif ext in TEXT_EXTENSIONS:
+        print(f"Extracting text document: {input_path}")
+        text = read_text_file(input_path)
+        if text is None or not text.strip():
+            print("ERROR: Could not read text document", file=sys.stderr)
+            sys.exit(1)
+        method = "plain-text"
+        pages = 0
+        pages_label = "sections"
+    elif ext in HTML_EXTENSIONS:
+        print(f"Extracting HTML: {input_path}")
+        text = extract_html_file(input_path)
+        if text is None or not text.strip():
+            print("ERROR: Could not extract text from HTML", file=sys.stderr)
+            sys.exit(1)
+        method = "html-parser"
+        pages = 0
+        pages_label = "sections"
+    elif ext == ".docx":
+        print(f"Extracting DOCX: {input_path}")
+        text, method = extract_docx(input_path)
+        pages = 0
+        pages_label = "sections"
+    elif ext == ".rtf":
+        print(f"Extracting RTF: {input_path}")
+        text, method = extract_rtf(input_path)
+        pages = 0
+        pages_label = "sections"
+    elif ext in CALIBRE_EBOOK_EXTENSIONS:
+        print(f"Extracting ebook with Calibre: {input_path}")
+        text = extract_with_ebook_convert(input_path)
+        if text is None or not text.strip():
+            print(
+                f"ERROR: Could not extract text from {ext}. Install Calibre and ensure ebook-convert is on PATH.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        method = "ebook-convert"
+        pages = 0
+        pages_label = "sections"
+    else:
+        print(
+            f"ERROR: Unsupported format '{ext}'. Supported: {supported_formats_message()}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # Write full text
     OUTPUT_TEXT.write_text(text, encoding="utf-8")
@@ -380,7 +598,7 @@ def main():
     metadata = {
         "source_file": str(Path(input_path).resolve()),
         "filename": Path(input_path).name,
-        "format": "epub" if is_epub else "pdf",
+        "format": document_format,
         "extraction_method": method,
         "extraction_mode": extraction_mode,
         "file_size_mb": round(file_size_mb, 2),
@@ -395,17 +613,22 @@ def main():
 
     OUTPUT_META.write_text(json.dumps(metadata, indent=2, ensure_ascii=False))
 
-    page_line = f"   {'Spine items' if is_epub else 'Pages'}: {pages}"
-    print(f"\n📖 Extraction complete:")
-    print(f"   Format  : {'EPUB' if is_epub else 'PDF'}")
+    page_label = {
+        "spine_items": "Spine items",
+        "pages": "Pages",
+        "sections": "Sections",
+    }.get(pages_label, pages_label.replace("_", " ").title())
+    page_line = f"   {page_label}: {pages}"
+    print("\nExtraction complete:")
+    print(f"   Format  : {document_format.upper()}")
     print(f"   Method  : {method}")
     print(page_line)
     print(f"   Words   : {len(text.split()):,}")
     print(f"   Tokens  : ~{tokens // 1000}K")
     print(f"   Chapters: {structure['chapters_detected']} detected")
     print(f"   ToC     : {'yes' if structure['has_toc'] else 'not detected'}")
-    print(f"\n   Text → {OUTPUT_TEXT}")
-    print(f"   Meta → {OUTPUT_META}")
+    print(f"\n   Text -> {OUTPUT_TEXT}")
+    print(f"   Meta -> {OUTPUT_META}")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 ---
 name: book-to-skill
-description: "Converts a technical book (PDF or EPUB) into a structured agent skill, extracting frameworks, mental models, principles, techniques, and anti-patterns. Use when the user wants to study a book through Amp or Claude Code, apply an author's frameworks while working, or build a reusable knowledge base from any PDF or EPUB."
+description: "Converts books and documents (PDF, EPUB, DOCX, HTML, Markdown, plain text, RTF, MOBI/AZW with Calibre) into structured agent skills, extracting frameworks, mental models, principles, techniques, and anti-patterns. Use when the user wants to study a document through Amp or Claude Code, apply an author's frameworks while working, or build a reusable knowledge base from a file."
 compatibility: "Amp skill directories (.agents/skills, ~/.config/agents/skills, ~/.config/amp/skills) and Claude Code skill directories (~/.claude/skills)."
 allowed-tools:
   - shell_command
@@ -8,7 +8,7 @@ allowed-tools:
   - Write
   - Glob
   - Grep
-argument-hint: <path-to-pdf-or-epub> [skill-name-slug]
+argument-hint: <path-to-document> [skill-name-slug]
 ---
 
 # Book-to-Skill Converter
@@ -37,7 +37,7 @@ Books contain crystallized expertise: frameworks, principles, and techniques tha
 Three paths available. Route based on what the user asks:
 
 ### 1. Full Conversion (Default)
-**Trigger:** User provides a PDF path without special instructions
+**Trigger:** User provides a supported document path without special instructions
 **Action:** Run all steps below (Steps 0–9)
 **Output:** Complete skill with SKILL.md, chapters/, glossary, patterns, cheatsheet
 
@@ -68,8 +68,8 @@ Generated skills should default to `~/.config/agents/skills/` for Amp unless the
 
 ## Step 0 — Out-of-scope check
 
-If the argument is NOT a path to a PDF or EPUB file, stop and respond:
-> "book-to-skill requires a PDF or EPUB path. Usage: `book-to-skill /path/to/book.pdf [skill-name]` or `book-to-skill /path/to/book.epub [skill-name]`"
+If the argument is NOT a path to a supported document file, stop and respond:
+> "book-to-skill requires a supported document path. Usage: `book-to-skill /path/to/book.pdf [skill-name]`, `book-to-skill /path/to/book.epub [skill-name]`, or another supported format such as `.docx`, `.md`, `.txt`, `.html`, `.rtf`, `.mobi`, or `.azw3`."
 
 Throughout the workflow, treat the first argument as `BOOK_PATH` and the optional second argument as `SKILL_NAME`.
 
@@ -79,10 +79,13 @@ Throughout the workflow, treat the first argument as `BOOK_PATH` and the optiona
 
 ```bash
 test -f "$BOOK_PATH" && echo "FILE_OK" || echo "FILE_NOT_FOUND: $BOOK_PATH"
-file "$BOOK_PATH" | grep -iE "pdf|epub|zip" && echo "FORMAT_OK" || echo "FORMAT_UNKNOWN"
+case "${BOOK_PATH##*.}" in
+  pdf|PDF|epub|EPUB|docx|DOCX|txt|TXT|md|MD|markdown|MARKDOWN|rst|RST|adoc|ADOC|asciidoc|ASCIIDOC|html|HTML|htm|HTM|rtf|RTF|mobi|MOBI|azw|AZW|azw3|AZW3) echo "FORMAT_OK" ;;
+  *) echo "FORMAT_UNKNOWN" ;;
+esac
 ```
 
-Check the file extension (`.pdf` or `.epub`) or magic bytes (`%PDF` or `PK` zip header).
+Check the file extension (`.pdf`, `.epub`, `.docx`, `.txt`, `.md`, `.markdown`, `.rst`, `.adoc`, `.html`, `.htm`, `.rtf`, `.mobi`, `.azw`, `.azw3`) or magic bytes (`%PDF` or `PK` zip header for EPUB/DOCX).
 
 If the file is not found or the format is not supported, stop with a clear error message listing supported formats.
 
@@ -107,11 +110,11 @@ Store the answer as `BOOK_TYPE`:
 > "📐 Technical mode selected — using Docling for structure-aware extraction (tables, code blocks, formulas preserved as markdown). This takes ~1.5s per page, so expect a few minutes for longer books. Starting now…"
 
 **If `BOOK_TYPE=text`**, inform:
-> "📄 Text mode selected — using fast extraction (pdftotext). Ready in seconds."
+> "📄 Text mode selected — using the fastest suitable extractor for this file type. Plain text/Markdown/HTML are usually ready in seconds; PDFs use pdftotext when available."
 
 ---
 
-## Step 2 — Extract text from PDF or EPUB
+## Step 2 — Extract text from the source document
 
 Run the extraction script, passing the book type:
 
@@ -142,8 +145,14 @@ fi
 "$PYTHON_BIN" "$SCRIPT_PATH" "$BOOK_PATH" --mode <BOOK_TYPE>
 ```
 
-- `--mode technical` → uses Docling (layout-aware, preserves tables and code blocks as markdown)
-- `--mode text` → uses pdftotext → PyPDF2 → pdfminer fallback chain (fast, plain text)
+- PDF `--mode technical` → uses Docling (layout-aware, preserves tables and code blocks as markdown)
+- PDF `--mode text` → uses pdftotext → PyPDF2 → pdfminer fallback chain (fast, plain text)
+- EPUB → uses ebooklib + BeautifulSoup4, then stdlib ZIP/HTML fallback
+- DOCX → uses python-docx, then stdlib ZIP/XML fallback
+- TXT/Markdown/reStructuredText/AsciiDoc → reads directly as text
+- HTML → uses BeautifulSoup4, then stdlib HTML fallback
+- RTF → uses striprtf, then a basic regex fallback
+- MOBI/AZW/AZW3 → uses Calibre `ebook-convert` when installed
 
 This creates:
 - `<tempdir>/book_skill_work/full_text.txt` — full extracted text
@@ -158,8 +167,8 @@ Read the `output_text` path in `<tempdir>/book_skill_work/metadata.json` to unde
 Read `<tempdir>/book_skill_work/metadata.json` and present the user with an estimate **before doing any generation**:
 
 ```
-📖 Book detected: <filename> (<format: PDF or EPUB>)
-📄 Pages/Spine items: ~<N> | Words: ~<N> | Source tokens: ~<N>K
+📖 Source detected: <filename> (<format>)
+📄 Pages/Spine items/Sections: ~<N> | Words: ~<N> | Source tokens: ~<N>K
 
 💰 Estimated token cost (Full Conversion):
    Input  (book reading + prompts): ~<N>K tokens
