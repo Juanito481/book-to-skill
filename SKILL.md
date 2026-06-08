@@ -186,7 +186,8 @@ Read `<tempdir>/book_skill_work/metadata.json` and present the user with an esti
 
 **How to estimate:**
 - Input tokens ≈ `estimated_tokens` from metadata × 1.3 (prompts overhead per chapter pass)
-- Output tokens ≈ chapters × 1,000 + 4,000 (SKILL.md) + 4,500 (glossary + patterns + cheatsheet)
+- Output tokens ≈ chapters × per-chapter budget + 4,000 (SKILL.md) + 4,500 (glossary + patterns + cheatsheet)
+  - Per-chapter budget midpoint by `BOOK_TYPE` (DEPTH is decided later in Step 4 and can raise it): `text` ≈ 1,000, `technical` ≈ 1,800. If the user has already indicated reference-only vs deep study, use the matching row of the Step 7 matrix.
 - Price: Sonnet input=$3/MTok output=$15/MTok — Haiku input=$0.80/MTok output=$4/MTok
 
 Wait for the user to confirm before proceeding. If they say "analyze only", switch to Mode 2.
@@ -269,6 +270,12 @@ Before generating, ask the user:
 
 Use the answer to weight what gets highlighted in the SKILL.md Core section.
 
+**Derive `DEPTH` from the answer (no extra prompt):**
+- Answer is **only** option 3 (reference) → `DEPTH=reference` — lean, fast-lookup chapters.
+- Answer includes option 1, 2, or 4 → `DEPTH=study` — deeper chapters with more worked detail, examples, and reasoning.
+
+`DEPTH` and `BOOK_TYPE` together set the per-chapter token budget in Step 7. Do **not** ask a separate "study vs reference" question — it is inferred here. (In Modes 2/3, where Step 4 is skipped, default `DEPTH=study`.)
+
 ---
 
 ## Step 5 — Determine skill name
@@ -306,9 +313,18 @@ mkdir -p "$SKILLS_HOME/<skill_name>/chapters"
 
 ## Step 7 — Generate chapter summaries
 
-**TOKEN BUDGET RULE — CRITICAL:**
-- Each chapter summary file: **800–1,200 tokens** (dense, not verbose)
-- Files are loaded on-demand — they are NOT capped per se, but keep them useful and tight
+**TOKEN BUDGET RULE — CRITICAL (adaptive):**
+
+The per-chapter budget scales with `BOOK_TYPE` and `DEPTH`. Technical chapters need room for code and tables; study depth needs room for worked reasoning. Pick the budget from this matrix:
+
+| | `DEPTH=reference` | `DEPTH=study` |
+|---|---|---|
+| `BOOK_TYPE=text` | 800–1,200 tokens | 1,500–2,500 tokens |
+| `BOOK_TYPE=technical` | 1,200–1,800 tokens | 2,000–3,000 tokens |
+
+- These are per-file targets, not hard caps — a dense chapter may run over, a thin one under. Density still beats length (Quality Rule #3): never pad to hit a number.
+- Files are loaded on-demand, so a larger chapter only costs tokens when that chapter is actually read.
+- When in doubt between two cells (e.g. mixed-content book), use the lower budget and let depth come from precision, not volume.
 
 For EACH chapter/major section identified in Step 3:
 
@@ -380,9 +396,20 @@ Create `$SKILLS_HOME/<skill_name>/patterns.md`:
 
 ### cheatsheet.md
 Create `$SKILLS_HOME/<skill_name>/cheatsheet.md`:
-- Decision tables, comparison matrices, quick-reference rules
-- The content you'd want on a single printed page
-- Max 1,000 tokens
+
+**This is the most differentiated layer of the skill — treat it as a reasoning aid, not a keyword list.** Anyone can grep the glossary for a term. The cheatsheet captures the author's *judgment*: the decisions they'd make and why. It's the file that turns "I know the words" into "I'd act the way the author would".
+
+Prioritize, in order:
+1. **Decision rules** — "When X, do Y, because Z." The if/then logic the author applies, stated so the reader can apply it without re-reading the book.
+2. **Decision trees / flowcharts** (as nested bullets or a small table) — for choices with more than two branches.
+3. **Trade-off matrices** — competing options scored on the dimensions the author cares about, so the reader can pick under their own constraints.
+4. **Thresholds & defaults** — the specific numbers, ratios, or rules of thumb the author commits to (e.g. "keep functions under ~20 lines", "alert when error budget < 10%").
+5. **Tells & smells** — fast heuristics for recognizing a situation ("if you see X, you're probably in trouble Y").
+
+Avoid: bare term→definition rows (that's the glossary), and prose paragraphs (that's the chapters). Every line should help the reader *decide* something.
+
+- Format mostly as compact tables and decision rules; the content you'd want on a single printed page kept beside you while working.
+- Max 1,200 tokens.
 
 ---
 
