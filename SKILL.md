@@ -319,12 +319,19 @@ The per-chapter budget scales with `BOOK_TYPE` and `DEPTH`. Technical chapters n
 
 | | `DEPTH=reference` | `DEPTH=study` |
 |---|---|---|
-| `BOOK_TYPE=text` | 800–1,200 tokens | 1,500–2,500 tokens |
+| `BOOK_TYPE=text` | 800–1,200 tokens | 1,000–1,800 tokens |
 | `BOOK_TYPE=technical` | 1,200–1,800 tokens | 2,000–3,000 tokens |
 
 - These are per-file targets, not hard caps — a dense chapter may run over, a thin one under. Density still beats length (Quality Rule #3): never pad to hit a number.
 - Files are loaded on-demand, so a larger chapter only costs tokens when that chapter is actually read.
 - When in doubt between two cells (e.g. mixed-content book), use the lower budget and let depth come from precision, not volume.
+
+**`DEPTH=study` is earned with content, not a bigger number.** The standard section template (Core Idea → Connects To) naturally lands a dense prose chapter around 700–900 tokens. To reach the study budget *honestly* — not by padding — a study-depth chapter must add concrete material:
+- **Reproduce one worked example or artifact** from the chapter (e.g. the example press release, a sample dialogue, a filled-in template, a decision the author walks through) under a `## Worked Example` section. This is the single biggest lever and the main thing a learner returns for.
+- **Expand the "How" of each framework** into explicit steps or criteria, not a one-liner.
+- **Add a short "Why it works / failure mode" note** to the top 1–2 frameworks.
+
+If a chapter genuinely has no worked example and resists expansion, let it land below the study floor rather than padding — and note that the chapter is thin in its Core Idea. A `reference`-depth chapter, by contrast, deliberately omits worked examples and keeps only the decision-ready essentials.
 
 For EACH chapter/major section identified in Step 3:
 
@@ -366,6 +373,13 @@ Create `$SKILLS_HOME/<skill_name>/chapters/ch<NN>-<slug>.md` using the structure
 
 ## Reference Tables *(technical books only — omit if BOOK_TYPE=text)*
 <!-- Reproduce any comparison matrix, parameter table, or decision table from the chapter in markdown. -->
+
+## Worked Example *(DEPTH=study only — omit for DEPTH=reference)*
+<!-- Reproduce or reconstruct one concrete example the author works through: a
+     sample document, a dialogue, a filled-in template, a before/after, or a
+     decision walked end-to-end. This is what makes a study chapter worth its
+     budget. Keep it faithful to the source; never copy long raw passages —
+     reconstruct the example compactly. -->
 
 ## Key Takeaways
 1. <Actionable insight>
