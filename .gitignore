@@ -22,3 +22,7 @@ site/
 docs/guide.md
 docs/skill-reference.md
 docs/BACKERS.md
+
+# Alfred: pinned 3.12 venv (torch/docling, ~956MB) — never commit
+.venv/
+*.pyc
